@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# VERSION: 1.1
+# VERSION: 2.0
 # AUTHOR: Davy39 <davy39@hmamail.com>, Paolo M
 # CONTRIBUTORS: Simon <simon@brulhart.me>
 
@@ -12,7 +12,7 @@ import re
 
 from html.parser import HTMLParser
 
-from helpers import retrieve_url, headers
+from helpers import retrieve_url, headers, download_file
 from novaprinter import prettyPrinter
 import tempfile
 import os
@@ -21,13 +21,15 @@ import io
 import json
 
 class cpasbien(object):
+    # This is a fake url only for engine associations in file download
+    url = "http://www.cpasbien.fr"
     name = "Cpasbien (french)"
     supported_categories = {
         "all": [""]
     }
 
     def __init__(self):
-        self.url = self.find_url()
+        self.real_url = self.find_url()
 
     def find_url(self):
         """Retrieve url from github repository, so it can work even if the url change"""
@@ -42,6 +44,21 @@ class cpasbien(object):
         except urllib.error.URLError as errno:
             print(" ".join(("Connection error:", str(errno.reason))))
             return "http://www.cpasbien.si"
+
+    def download_torrent(self, desc_link):
+        """ Download file at url and write it to a file, return the path to the file and the url """
+        file, path = tempfile.mkstemp()
+        file = os.fdopen(file, "wb")
+        # Download url
+        req = urllib.request.Request(desc_link, headers=headers)
+        try:
+            response = urllib.request.urlopen(req)
+        except urllib.error.URLError as errno:
+            print(" ".join(("Connection error:", str(errno.reason))))
+            return ""
+        content = response.read().decode()
+        link = self.real_url + re.findall("<a href='(\/get_torrents\/.*?)'>", content)[0]
+        print(download_file(link))
 
     class TableRowExtractor(HTMLParser):
         def __init__(self, url, results):
@@ -72,7 +89,7 @@ class cpasbien(object):
                 if tag == 'a' and self.current_div_class == 'name':
                     self.current_row['link'] = self.url + attrs['href']
                     self.current_row["desc_link"] = self.url + attrs['href']
-                    self.current_row["engine_url"] = self.url
+
 
         def handle_endtag(self, tag):
             if tag == 'tr':
@@ -93,45 +110,17 @@ class cpasbien(object):
         def get_rows(self):
             return self.results
 
-    def download_torrent(self, desc_link):
-        """ Download file at url and write it to a file, return the path to the file and the url """
-        file, path = tempfile.mkstemp()
-        file = os.fdopen(file, "wb")
-        # Download url
-        req = urllib.request.Request(desc_link, headers=headers)
-        try:
-            response = urllib.request.urlopen(req)
-        except urllib.error.URLError as errno:
-            print(" ".join(("Connection error:", str(errno.reason))))
-            return ""
-        content = response.read().decode()
-        link = self.url + re.findall("<a href='(\/get_torrents\/.*?)'>", content)[0]
-        req = urllib.request.Request(link, headers=headers)
-        response = urllib.request.urlopen(req)
-        dat = response.read()
-        # Check if it is gzipped
-        if dat[:2] == b'\x1f\x8b':
-            # Data is gzip encoded, decode it
-            compressedstream = io.BytesIO(dat)
-            gzipper = gzip.GzipFile(fileobj=compressedstream)
-            extracted_data = gzipper.read()
-            dat = extracted_data
 
-        # Write it to a file
-        file.write(dat)
-        file.close()
-        # return file path
-        print(path + " " + link)
+
 
     def search(self, what, cat="all"):
         results = []
         len_old_result = 0
         for page in range(10):
-            # parser = self.SimpleHTMLParser(results, self.url)
-            url = f"{self.url}/recherche/{what}/{page * 50 + 1}"
+            url = f"{self.real_url}/recherche/{what}/{page * 50 + 1}"
             try:
                 data = retrieve_url(url)
-                parser = self.TableRowExtractor(self.url, results)
+                parser = self.TableRowExtractor(self.real_url, results)
                 parser.feed(data)
                 results = parser.results
                 parser.close()
@@ -145,6 +134,21 @@ class cpasbien(object):
         good_order = [ord_res for _, ord_res in
                       sorted(zip([[int(res['seeds']), int(res['leech'])] for res in results], range(len(results))))]
         results = [results[x] for x in good_order[::-1]]
-        [prettyPrinter(res) for res in results]
 
+        # Fix size and add engine
+        for i, res in enumerate(results):
+            results[i]['size'] = unit_fr2en(res['size'])
+            results[i]["engine_url"] = self.url
+        # Print
+        for res in results:
+            prettyPrinter(res)
+
+
+def unit_fr2en(size):
+    """Convert french size unit to english"""
+    return re.sub(
+        r'([KMGTP])o',
+        lambda match: match.group(1) + 'B',
+        size, flags=re.IGNORECASE
+    )
 
