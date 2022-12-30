@@ -18,14 +18,30 @@ import tempfile
 import os
 import gzip
 import io
-
+import json
 
 class cpasbien(object):
-    url = "http://www.cpasbien.si"
     name = "Cpasbien (french)"
     supported_categories = {
         "all": [""]
     }
+
+    def __init__(self):
+        self.url = self.find_url()
+
+    def find_url(self):
+        """Retrieve url from github repository, so it can work even if the url change"""
+        link_github = "https://raw.githubusercontent.com/menegop/qbfrench/master/urls.json"
+        try:
+            req = urllib.request.Request(link_github, headers=headers)
+            response = urllib.request.urlopen(req)
+            content = response.read().decode()
+            urls = json.loads(content)
+            return urls['cpasbien'][0]
+
+        except urllib.error.URLError as errno:
+            print(" ".join(("Connection error:", str(errno.reason))))
+            return "http://www.cpasbien.si"
 
     class TableRowExtractor(HTMLParser):
         def __init__(self, url, results):
