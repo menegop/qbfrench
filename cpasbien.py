@@ -1,47 +1,31 @@
 # -*- coding: utf-8 -*-
 # VERSION: 1.1
-# AUTHOR: Davy39 <davy39@hmamail.com>
+# AUTHOR: Davy39 <davy39@hmamail.com>, Paolo M
 # CONTRIBUTORS: Simon <simon@brulhart.me>
 
 # Copyleft
 
 
 from __future__ import print_function
-
+import urllib
 import re
-# python3
+
 from html.parser import HTMLParser
-import os
-try:
-    import requests
-except:
-    os.system("pip install requests")
-    import requests
 
-from helpers import download_file, retrieve_url
+from helpers import retrieve_url, headers
 from novaprinter import prettyPrinter
-
+import tempfile
+import os
+import gzip
+import io
 
 
 class cpasbien(object):
     url = "http://www.cpasbien.si"
     name = "Cpasbien (french)"
     supported_categories = {
-        "all": [""],
-        "books": ["ebook/"],
-        "movies": ["films/"],
-        "tv": ["series/"],
-        "music": ["musique/"],
-        "software": ["logiciels/"],
-        "games": ["jeux-pc/", "jeux-consoles/"]
+        "all": [""]
     }
-
-    def __init__(self):
-        self.results = []
-        self.parser = self.SimpleHTMLParser(self.results, self.url)
-
-    def download_torrent(self, url):
-        print(download_file(url))
 
     class TableRowExtractor(HTMLParser):
         def __init__(self, url, results):
@@ -65,7 +49,6 @@ class cpasbien(object):
                 self.in_tr = True
 
             if self.in_tr and tag in ['div', 'a']:
-
                 # extract the class name of the div element if it exists
                 self.in_div_or_anchor = True
                 attrs = dict(attrs)
@@ -77,14 +60,10 @@ class cpasbien(object):
 
         def handle_endtag(self, tag):
             if tag == 'tr':
+                if self.in_table_corps and 'desc_link' in self.current_row and self.current_row['desc_link'] not in [res['desc_link'] for res in self.results]:
+                    self.results.append(self.current_row)
                 self.in_tr = False
-                if self.current_row['desc_link'] not in self.results:
-                    r = requests.get(self.current_row['desc_link'])
-                    content =  r.content.decode()
-                    link = self.url + re.findall("<a href='(\/get_torrents\/.*?)'>", content)[0]
-                    self.current_row['link'] = link
-                    self.results.append(self.current_row['desc_link'])
-                    prettyPrinter(self.current_row)
+
                 self.current_row = {}
             if tag == 'table':
                 self.in_table_corps = False
@@ -98,85 +77,58 @@ class cpasbien(object):
         def get_rows(self):
             return self.results
 
-    class SimpleHTMLParser(HTMLParser):
-        def __init__(self, results, url, *args):
-            HTMLParser.__init__(self)
-            self.url = url
-            self.div_counter = None
-            self.current_item = None
-            self.results = results
+    def download_torrent(self, desc_link):
+        """ Download file at url and write it to a file, return the path to the file and the url """
+        file, path = tempfile.mkstemp()
+        file = os.fdopen(file, "wb")
+        # Download url
+        req = urllib.request.Request(desc_link, headers=headers)
+        try:
+            response = urllib.request.urlopen(req)
+        except urllib.error.URLError as errno:
+            print(" ".join(("Connection error:", str(errno.reason))))
+            return ""
+        content = response.read().decode()
+        link = self.url + re.findall("<a href='(\/get_torrents\/.*?)'>", content)[0]
+        req = urllib.request.Request(link, headers=headers)
+        response = urllib.request.urlopen(req)
+        dat = response.read()
+        # Check if it is gzipped
+        if dat[:2] == b'\x1f\x8b':
+            # Data is gzip encoded, decode it
+            compressedstream = io.BytesIO(dat)
+            gzipper = gzip.GzipFile(fileobj=compressedstream)
+            extracted_data = gzipper.read()
+            dat = extracted_data
 
-        def handle_starttag(self, tag, attr):
-            method = 'start_' + tag
-            if hasattr(self, method) and tag in ('a', 'div'):
-                getattr(self, method)(attr)
-
-        def start_a(self, attr):
-            params = dict(attr)
-            if params.get('href', '').startswith(self.url + '/dl-torrent/'):
-                self.current_item = {}
-                self.div_counter = 0
-                self.current_item["desc_link"] = params["href"]
-                fname = params["href"].split('/')[-1]
-                fname = re.sub(r'\.html$', '.torrent', fname, flags=re.IGNORECASE)
-                self.current_item["link"] = self.url + '/telechargement/' + fname
-
-        def start_div(self, attr):
-            if self.div_counter is not None:
-                self.div_counter += 1
-                # Abort if div class does not match
-                div_classes = {1: 'poid', 2: 'up', 3: 'down'}
-                attr = dict(attr)
-                if div_classes[self.div_counter] not in attr.get('class', ''):
-                    self.div_counter = None
-                    self.current_item = None
-
-        def handle_data(self, data):
-            data = data.strip()
-            if data:
-                if self.div_counter == 0:
-                    self.current_item['name'] = data
-                elif self.div_counter == 1:
-                    self.current_item['size'] = unit_fr2en(data)
-                elif self.div_counter == 2:
-                    self.current_item['seeds'] = data
-                elif self.div_counter == 3:
-                    self.current_item['leech'] = data
-            # End of current_item, final validation:
-
-            if self.div_counter == 3:
-                required_keys = ('name', 'size')
-                if any(key in self.current_item for key in required_keys):
-                    self.current_item['engine_url'] = self.url
-                    prettyPrinter(self.current_item)
-                    self.results.append("a")
-                else:
-                    pass
-                self.current_item = None
-                self.div_counter = None
+        # Write it to a file
+        file.write(dat)
+        file.close()
+        # return file path
+        print(path + " " + link)
 
     def search(self, what, cat="all"):
         results = []
+        len_old_result = 0
         for page in range(10):
             # parser = self.SimpleHTMLParser(results, self.url)
-            parser = self.TableRowExtractor(self.url, results)
-            for subcat in self.supported_categories[cat]:
-                url = f"{self.url}/recherche/{what}/{page*50 +1}"
+            url = f"{self.url}/recherche/{what}/{page * 50 + 1}"
+            try:
                 data = retrieve_url(url)
+                parser = self.TableRowExtractor(self.url, results)
                 parser.feed(data)
-            # print(parser.rows)
-            parser.close()
-            results = parser.results
-            print(len(results))
-            if len(results) <= 0:
+                results = parser.results
+                parser.close()
+            except:
                 break
 
+            if len(results) - len_old_result == 0:
+                break
+            len_old_result = len(results)
+        # Sort results
+        good_order = [ord_res for _, ord_res in
+                      sorted(zip([[int(res['seeds']), int(res['leech'])] for res in results], range(len(results))))]
+        results = [results[x] for x in good_order[::-1]]
+        [prettyPrinter(res) for res in results]
 
 
-def unit_fr2en(size):
-    """Convert french size unit to english"""
-    return re.sub(
-        r'([KMGTP])o',
-        lambda match: match.group(1) + 'B',
-        size, flags=re.IGNORECASE
-    )
