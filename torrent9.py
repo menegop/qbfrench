@@ -9,21 +9,17 @@
 from __future__ import print_function
 import urllib
 import re
-
 from html.parser import HTMLParser
-
 from helpers import retrieve_url, headers, download_file
 from novaprinter import prettyPrinter
 import tempfile
 import os
-import gzip
-import io
 import json
 
 class torrent9(object):
     # This is a fake url only for engine associations in file download
     url = "http://torent9.fr"
-    name = "Cpasbien (french)"
+    name = "Torrent9 (french)"
     supported_categories = {
         "all": [""]
     }
@@ -43,7 +39,7 @@ class torrent9(object):
 
         except urllib.error.URLError as errno:
             print(" ".join(("Connection error:", str(errno.reason))))
-            return "http://www.cpasbien.si"
+            return "https://www.torrent9.fm"
 
     def download_torrent(self, desc_link):
         """ Download file at url and write it to a file, return the path to the file and the url """
@@ -57,17 +53,21 @@ class torrent9(object):
             print(" ".join(("Connection error:", str(errno.reason))))
             return ""
         content = response.read().decode()
-        link = self.real_url + re.findall("<a href='(\/get_torrents\/.*?)'>", content)[0]
-        print(download_file(link))
+        pattern = '"btn btn-danger download" href="(\/.*?)">'
+
+        link = self.real_url + re.findall(pattern, content)[0]
+        print(link, desc_link)
+
 
     class TableRowExtractor(HTMLParser):
         def __init__(self, url, results):
             self.results = results
-            self.map_name = {'titre': 'name', 'poid': 'size', 'seed_ok': 'seeds', 'down': 'leech'}
+
             self.in_tr = False
             self.in_table_corps = False
             self.in_div_or_anchor = False
             self.current_row = {}
+            self.in_name = False
             self.url = url
             super().__init__()
 
@@ -82,14 +82,19 @@ class torrent9(object):
                 self.in_tr = True
                 self.item_counter = 0
 
-            if self.in_tr and tag in ['span', 'a']:
+            if self.in_tr and tag in ['td', 'a']:
                 # extract the class name of the div element if it exists
                 self.in_div_or_anchor = True
-                attrs = dict(attrs)
+
 
                 if tag == 'a':
+                    attrs = dict(attrs)
                     self.current_row['link'] = self.url + attrs['href']
                     self.current_row["desc_link"] = self.url + attrs['href']
+
+            if tag == 'h3':
+                self.in_name = True
+                self.current_row["name"] = []
 
 
         def handle_endtag(self, tag):
@@ -97,17 +102,35 @@ class torrent9(object):
                 if self.in_table_corps and 'desc_link' in self.current_row and self.current_row['desc_link'] not in [res['desc_link'] for res in self.results]:
                     self.results.append(self.current_row)
                 self.in_tr = False
-
-                self.current_row = {}
+                self.current_row = {'seeds': -1, 'leech': -1}
             if tag == 'tbody':
                 self.in_table_corps = False
-            if tag in ['span', 'a']:
+            if tag in ['td', 'a']:
                 self.in_div_or_anchor = False
+            if tag == 'h3':
+                self.in_name = False
+                self.current_row["name"] = " ".join(self.current_row["name"])
 
         def handle_data(self, data):
-            if self.in_div_or_anchor and self.current_div_class:
-                self.current_row[self.item_counter] = data
-                self.item_counter += 1
+            if self.in_div_or_anchor:
+                if self.in_name:
+                    self.current_row["name"].append(data.strip())
+                else:
+                    if self.item_counter == 3:
+                        self.current_row['size'] = data.strip()
+                    if self.item_counter == 5:
+                        seeds = data.strip()
+                        try:
+                            self.current_row['seeds'] = int(seeds)
+                        except:
+                            pass
+                    if self.item_counter == 7:
+                        leech = data.strip()
+                        try:
+                            self.current_row['leech'] = int(leech)
+                        except:
+                            pass
+                    self.item_counter += 1
 
         def get_rows(self):
             return self.results
@@ -154,3 +177,6 @@ def unit_fr2en(size):
         size, flags=re.IGNORECASE
     )
 
+# For testing
+#if __name__ == "__main__":
+#    engine = torrent9()
