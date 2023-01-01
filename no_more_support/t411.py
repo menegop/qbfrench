@@ -23,8 +23,8 @@ except ImportError:
     from html.parser import HTMLParser
     from urllib.parse import urlencode
 
-from helpers import retrieve_url
-from novaprinter import prettyPrinter
+from test_plugin.helpers import retrieve_url
+from test_plugin.novaprinter import prettyPrinter
 
 
 class t411(object):
